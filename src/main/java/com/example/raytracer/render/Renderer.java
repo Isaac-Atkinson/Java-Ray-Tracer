@@ -1,0 +1,327 @@
+package com.example.raytracer.render;
+
+import com.example.raytracer.helper.Intersection;
+import com.example.raytracer.helper.Ray;
+import com.example.raytracer.helper.Vector;
+import com.example.raytracer.helper.LightSource;
+import com.example.raytracer.geometry.SceneObject;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
+import javafx.scene.paint.Color;
+
+import java.util.ArrayList;
+
+/**
+ * This class is responsible for rendering the scene.
+ */
+public class Renderer {
+
+    public static final double EPSILON = 1e-6;
+
+    //The sample levels for sampling a light source. The light source sampling expects square numbers
+    private static final int[] sampleLevels = {1, 4, 16, 64};
+
+    //The background colour
+    private static final Color backgroundColor = Color.color(0.0, 0.0, 0.0);
+
+    //The current sample count is selected from the array of possible sample counts
+    private int currSampleIndex = 0;
+    private int sampleCount = sampleLevels[currSampleIndex];
+
+    //The z axis coordinate of the image plane
+    private static final int imagePlaneZ = 0;
+    //The camera position
+    private final Vector cameraPos = new Vector(0, 0, -400);
+
+    private WritableImage image;
+    private int imageWidth;
+    private int imageHeight;
+
+    //The scene to be rendered
+    private RenderScene renderScene;
+
+
+    public Renderer(WritableImage image, RenderScene renderScene) {
+        this.image = image;
+        this.renderScene = renderScene;
+        imageWidth = (int) image.getWidth();
+        imageHeight = (int) image.getHeight();
+    }
+
+
+
+
+    /**
+     * Loops through each pixel, traces a ray and computes the colour
+     * for that pixel before writing the colour to the image.
+     */
+    public void render() {
+        PixelWriter image_writer = image.getPixelWriter();
+
+
+        //Loop through every pixel
+        for (int y = 0; y < imageHeight; y++) {
+            for (int x = 0; x < imageWidth; x++) {
+
+                //Generate a ray
+                Ray ray = generateRay(x, y);
+
+                //Find the closest intersection
+                Intersection obj = renderScene.closestHit(ray);
+                Color colour;
+
+                //Apply shading if hit found, otherwise apply background colour
+                if(obj.hit != null){
+                    colour = applyShading(obj, ray);
+
+                } else {
+                    colour = backgroundColor;
+                }
+
+                //Set pixel color
+                image_writer.setColor(x, y, colour);
+            }
+        }
+    }
+
+//    public boolean naiveEqualsBVH(){
+//        for (int y = 0; y < imageHeight; y++) {
+//            System.out.println(y);
+//            for (int x = 0; x < imageWidth; x++) {
+//
+//                Ray ray = generateRay(x, y);
+//
+//
+//                Intersection hitNaive = renderScene.closestHitNaive(ray);
+//                Intersection hitBVH = renderScene.closestHit(ray);
+//
+//                if(hitNaive.hit != hitBVH.hit || hitNaive.t != hitBVH.t ){
+//                    return false;
+//                }
+//            }
+//        }
+//        return true;
+//    }
+
+
+
+
+    /**
+     * Applies shading at an intersection point.
+     * @param obj the intersection
+     * @param ray the ray being traced
+     * @return the computed colour at the intersection point
+     */
+    private Color applyShading(Intersection obj, Ray ray) {
+        double[] rgb = {0.0, 0.0, 0.0};
+
+        Vector intersection = ray.origin.add(ray.direction.mul(obj.t)); //Calculate intersection point
+        Vector normal = obj.hit.getNormal(intersection); //Surface normal at point of intersection
+        normal.normalise();
+
+        double diffuseSum = 0.0;
+        double specularSum = 0.0;
+
+        ArrayList<Vector> samples = renderScene.light.sampleLightSource(sampleCount); //sample the light source
+
+        for (Vector sample : samples) {
+
+            Vector toLight = sample.sub(intersection); //Direction from intersection to sample point
+            toLight.normalise();
+
+            Vector offsetOrigin = intersection.add(toLight.mul(EPSILON)); //Offset origin to avoid self-shadowing
+            Ray toLightRay = new Ray(offsetOrigin, toLight);
+
+            //Accumulate diffuse and specular values only if the light source is visible
+            if(lightSourceVisible(toLightRay, sample)){
+
+                //compute diffuse contribution
+                double dp = calculateDP(toLight, normal, ray);
+                diffuseSum += dp;
+
+                //compute specular contribution if shininess greater than zero
+                if(obj.hit.shininess > 0){
+                    Vector lightToIntersection = intersection.sub(sample);
+                    lightToIntersection.normalise();
+
+                    Vector intersectionToRayOrigin = ray.origin.sub(intersection);
+                    intersectionToRayOrigin.normalise();
+
+                    double spec = calculateSpec(lightToIntersection, normal, intersectionToRayOrigin, obj.hit.shininess);
+                    specularSum += spec;
+                }
+            }
+        }
+
+        double diff;
+        double spec;
+        diff = diffuseSum / sampleCount; //Average diffuse
+        spec = specularSum / sampleCount; //Average specular
+
+        rgb = applyAmbient(rgb, obj.hit, renderScene.light); //Add ambient contribution
+
+        rgb = applyDiffuse(rgb, obj.hit, renderScene.light, diff); //Add diffuse contribution
+
+        rgb = applySpecular(rgb, obj.hit, renderScene.light, spec); //Add specular contribution
+
+        rgb = clampRGB(rgb); //Clamp rgb values in range [0, 1]
+        return Color.color(rgb[0], rgb[1], rgb[2]);
+    }
+
+
+    /**
+     * Checks if the light source is visible or blocked
+     * from a certain point.
+     * @param ray a ray from the intersection to the light source
+     * @param lightPos the light position current being checked
+     * @return true if the light source is visible, false otherwise.
+     */
+    private boolean lightSourceVisible(Ray ray, Vector lightPos) {
+
+        Vector toLight = lightPos.sub(ray.origin);
+        double distanceToLight = toLight.magnitude();
+
+        Intersection obj = renderScene.closestHit(ray);
+
+        if (obj == null) {
+            return true;
+        }
+        if ((obj.t > 0 && obj.t < distanceToLight)) { //Checks if object between ray origin and light source
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    /**
+     * Generates a ray in the direction of the pixel.
+     * @param x the pixel x coordinate
+     * @param y the pixel y coordinate
+     * @return the generated ray
+     */
+    private Ray generateRay(int x, int y){
+
+        Vector pixelPos = new Vector(x - (imageWidth / 2.0),
+                (imageHeight - y) - (imageHeight / 2.0),
+                imagePlaneZ);
+
+        Vector direction = pixelPos.sub(cameraPos);
+        direction.normalise();
+
+        return new Ray(cameraPos, direction);
+    }
+
+
+    /**
+     * Applies ambient shading.
+     * @param rgb the current colour at the point
+     * @param obj the object being shaded
+     * @param light the light source
+     * @return the rgb array updated after applying ambient shading.
+     */
+    private double[] applyAmbient(double[] rgb, SceneObject obj, LightSource light) {
+        rgb[0] += obj.ambient.getRed() * light.color.getRed();
+        rgb[1] += obj.ambient.getGreen() * light.color.getGreen();
+        rgb[2] += obj.ambient.getBlue() * light.color.getBlue();
+        return rgb;
+    }
+
+    /**
+     * Applies diffuse shading.
+     * @param rgb the current colour at the point
+     * @param obj the object being shaded
+     * @param light the light source
+     * @param diff the diffuse contribution
+     * @return the rgb array updated after applying diffuse shading.
+     */
+    private double[] applyDiffuse(double[] rgb, SceneObject obj, LightSource light, double diff) {
+        rgb[0] += obj.diffuse.getRed() * light.color.getRed() * diff;
+        rgb[1] += obj.diffuse.getGreen() * light.color.getGreen() * diff;
+        rgb[2] += obj.diffuse.getBlue() * light.color.getBlue() * diff;
+        return rgb;
+    }
+
+
+    /**
+     * Applies specular shading.
+     * @param rgb the current colour at the point
+     * @param obj the object being shaded
+     * @param light the light source
+     * @param spec the specular contribution.
+     * @return the rgb array updated after applying specular shading.
+     */
+    private double[] applySpecular(double[] rgb, SceneObject obj, LightSource light, double spec) {
+        rgb[0] += obj.specular.getRed() * light.color.getRed() * spec;
+        rgb[1] += obj.specular.getGreen() * light.color.getGreen()  * spec;
+        rgb[2] += obj.specular.getBlue() * light.color.getBlue()  * spec;
+        return rgb;
+    }
+
+    /**
+     * Calculates the dot product between the surface normal
+     * and the vector to the light source.
+     * Triangle normals may face the wrong direction and
+     * are flipped here before calculating the dp.
+     * @param toLight a vector to the light source
+     * @param normal the surface normal at the point being shaded
+     * @param ray the ray being traced
+     * @return the dot product between the surface normal
+     *         and the vector to the light source.
+     */
+    private double calculateDP(Vector toLight, Vector normal, Ray ray){
+        return Math.max(0, toLight.dot(normal));
+    }
+
+
+    /**
+     * Calculates the specular component
+     * @param lightToIntersection a vector from the light to the intersection point.
+     * @param normal the surface normal at the point being shaded
+     * @param intersectionToRayOrigin a vector from the intersection point to the ray origin.
+     * @param shininess the shininess coefficient of the object being shaded
+     * @return the specular component
+     */
+    private double calculateSpec(Vector lightToIntersection, Vector normal, Vector intersectionToRayOrigin, double shininess) {
+        Vector secondaryRay = lightToIntersection.sub(normal.mul(2 * lightToIntersection.dot(normal)));
+        secondaryRay.normalise();
+
+        return Math.pow((Math.max(0, secondaryRay.dot(intersectionToRayOrigin))), shininess);
+    }
+
+
+    /**
+     * Clamps values in the range [0, 1].
+     * @param rgb the rgb array to be clamped.
+     * @return the rgb array after clamping has taken place
+     */
+    private double[] clampRGB(double[] rgb){
+        if(rgb[0] > 1) rgb[0] = 1;
+        if(rgb[1] > 1) rgb[1] = 1;
+        if(rgb[2] > 1) rgb[2] = 1;
+
+        if(rgb[0] < 0) rgb[0] = 0;
+        if(rgb[1] < 0) rgb[1] = 0;
+        if(rgb[2] < 0) rgb[2] = 0;
+
+        return rgb;
+    }
+
+    public void increaseSampleCount() {
+        if(currSampleIndex < sampleLevels.length - 1) {
+            currSampleIndex++;
+            sampleCount = sampleLevels[currSampleIndex];
+        }
+
+    }
+    public void decreaseSampleCount() {
+        if(currSampleIndex > 0) {
+            currSampleIndex--;
+            sampleCount = sampleLevels[currSampleIndex];
+        }
+    }
+
+    public int getSampleCount() {
+        return sampleCount;
+    }
+
+}

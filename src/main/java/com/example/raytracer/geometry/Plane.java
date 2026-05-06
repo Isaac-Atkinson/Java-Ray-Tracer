@@ -1,0 +1,42 @@
+package com.example.raytracer.geometry;
+import com.example.raytracer.helper.Intersection;
+import com.example.raytracer.helper.Ray;
+import com.example.raytracer.helper.Vector;
+import javafx.scene.paint.Color;
+
+
+public class Plane extends SceneObject {
+
+    private static final double EPSILON = 1e-6;
+
+    public Vector planeNormal;
+    public Vector pointOnPlane;
+
+    public Plane (Vector planeNormal, Vector pointOnPlane,
+                  Color ambient, Color diffuse, Color specular,
+                  double shininess ) {
+        super(ambient,diffuse,specular,shininess);
+        this.planeNormal = planeNormal;
+        this.pointOnPlane = pointOnPlane;
+    }
+
+    public Intersection intersect(Ray ray){
+        double denom = planeNormal.dot(ray.direction);
+        if(denom == 0) return null;
+        if(denom > -EPSILON && denom < EPSILON) {
+            return null;
+        }
+
+        double t = planeNormal.dot(pointOnPlane.sub(ray.origin)) / denom;
+        if(t < EPSILON) {
+            return null;
+        }
+        return new Intersection(this, t);
+    }
+
+    public Vector getNormal(Vector intersection){
+        return planeNormal;
+    }
+
+
+}

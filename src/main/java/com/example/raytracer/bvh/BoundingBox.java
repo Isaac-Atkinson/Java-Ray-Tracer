@@ -1,0 +1,37 @@
+package com.example.raytracer.bvh;
+
+import com.example.raytracer.helper.Vector;
+
+/**
+ * Represents a bounding box
+ */
+public class BoundingBox {
+
+    public Vector minValues;
+    public Vector maxValues;
+
+
+
+    public BoundingBox(Vector minValues, Vector maxValues) {
+        this.minValues = minValues;
+        this.maxValues = maxValues;
+    }
+
+    /**
+     * Returns the longest axis of this bounding box
+     * @return an enum describing the longest axis
+     */
+    public Axis longestAxis(){
+        double xDiff = maxValues.x - minValues.x;
+        double yDiff = maxValues.y - minValues.y;
+        double zDiff = maxValues.z - minValues.z;
+
+        if(xDiff > yDiff && xDiff > zDiff){
+            return Axis.X;
+        } else if(yDiff > xDiff && yDiff > zDiff){
+            return Axis.Y;
+        }  else {
+            return Axis.Z;
+        }
+    }
+}
